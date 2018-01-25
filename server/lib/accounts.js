@@ -1,3 +1,6 @@
+import _ from 'underscore';
+import s from 'underscore.string';
+
 const accountsConfig = {
 	forbidClientAccountCreation: true,
 	loginExpirationInDays: RocketChat.settings.get('Accounts_LoginExpiration')
@@ -7,12 +10,12 @@ Accounts.config(accountsConfig);
 
 Accounts.emailTemplates.siteName = RocketChat.settings.get('Site_Name');
 
-Accounts.emailTemplates.from = `${RocketChat.settings.get('Site_Name')} <${RocketChat.settings.get('From_Email')}>`;
+Accounts.emailTemplates.from = `${ RocketChat.settings.get('Site_Name') } <${ RocketChat.settings.get('From_Email') }>`;
 
 const verifyEmailHtml = Accounts.emailTemplates.verifyEmail.text;
 
 Accounts.emailTemplates.verifyEmail.html = function(user, url) {
-	url = url.replace(Meteor.absoluteUrl(), `${Meteor.absoluteUrl()}login/`);
+	url = url.replace(Meteor.absoluteUrl(), `${ Meteor.absoluteUrl() }login/`);
 	return verifyEmailHtml(user, url);
 };
 
@@ -63,8 +66,16 @@ Accounts.onCreateUser(function(options, user = {}) {
 	user.active = !RocketChat.settings.get('Accounts_ManuallyApproveNewUsers');
 
 	if (!user.name) {
-		if (options.profile && options.profile.name) {
-			user.name = options.profile.name;
+		if (options.profile) {
+			if (options.profile.name) {
+				user.name = options.profile.name;
+			} else if (options.profile.firstName && options.profile.lastName) {
+				// LinkedIn format
+				user.name = `${ options.profile.firstName } ${ options.profile.lastName }`;
+			} else if (options.profile.firstName) {
+				// LinkedIn format
+				user.name = options.profile.firstName;
+			}
 		}
 	}
 
@@ -95,6 +106,13 @@ Accounts.insertUserDoc = _.wrap(Accounts.insertUserDoc, function(insertUserDoc, 
 
 	delete user.globalRoles;
 
+	if (user.services && !user.services.password) {
+		const defaultAuthServiceRoles = String(RocketChat.settings.get('Accounts_Registration_AuthenticationServices_Default_Roles')).split(',');
+		if (defaultAuthServiceRoles.length > 0) {
+			roles = roles.concat(defaultAuthServiceRoles.map(s => s.trim()));
+		}
+	}
+
 	if (!user.type) {
 		user.type = 'user';
 	}
@@ -102,18 +120,27 @@ Accounts.insertUserDoc = _.wrap(Accounts.insertUserDoc, function(insertUserDoc, 
 	const _id = insertUserDoc.call(Accounts, options, user);
 
 	user = Meteor.users.findOne({
-		_id: _id
+		_id
 	});
 
-	if (user.username && options.joinDefaultChannels !== false && user.joinDefaultChannels !== false) {
-		Meteor.runAsUser(_id, function() {
-			return Meteor.call('joinDefaultChannels', options.joinDefaultChannelsSilenced);
-		});
+	if (user.username) {
+		if (options.joinDefaultChannels !== false && user.joinDefaultChannels !== false) {
+			Meteor.runAsUser(_id, function() {
+				return Meteor.call('joinDefaultChannels', options.joinDefaultChannelsSilenced);
+			});
+		}
+
+		if (user.type !== 'visitor') {
+			Meteor.defer(function() {
+				return RocketChat.callbacks.run('afterCreateUser', user);
+			});
+		}
 	}
 
 	if (roles.length === 0) {
 		const hasAdmin = RocketChat.models.Users.findOne({
-			roles: 'admin'
+			roles: 'admin',
+			type: 'user'
 		}, {
 			fields: {
 				_id: 1
@@ -128,9 +155,6 @@ Accounts.insertUserDoc = _.wrap(Accounts.insertUserDoc, function(insertUserDoc, 
 	}
 
 	RocketChat.authz.addUserRoles(_id, roles);
-	Meteor.defer(function() {
-		return RocketChat.callbacks.run('afterCreateUser', options, user);
-	});
 
 	return _id;
 });
@@ -152,12 +176,20 @@ Accounts.validateLoginAttempt(function(login) {
 		});
 	}
 
+	if (!login.user.roles || !Array.isArray(login.user.roles)) {
+		throw new Meteor.Error('error-user-has-no-roles', 'User has no roles', {
+			'function': 'Accounts.validateLoginAttempt'
+		});
+	}
+
 	if (login.user.roles.includes('admin') === false && login.type === 'password' && RocketChat.settings.get('Accounts_EmailVerification') === true) {
 		const validEmail = login.user.emails.filter(email => email.verified === true);
 		if (validEmail.length === 0) {
 			throw new Meteor.Error('error-invalid-email', 'Invalid email __email__');
 		}
 	}
+
+	login = RocketChat.callbacks.run('onValidateLogin', login);
 
 	RocketChat.models.Users.updateLastLoginById(login.user._id);
 	Meteor.defer(function() {
@@ -193,7 +225,7 @@ Accounts.validateNewUser(function(user) {
 
 	if (user.emails && user.emails.length > 0) {
 		const email = user.emails[0].address;
-		const inWhiteList = domainWhiteList.some(domain => email.match('@' + RegExp.escape(domain) + '$'));
+		const inWhiteList = domainWhiteList.some(domain => email.match(`@${ RegExp.escape(domain) }$`));
 
 		if (inWhiteList === false) {
 			throw new Meteor.Error('error-invalid-domain');

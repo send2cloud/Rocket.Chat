@@ -1,4 +1,7 @@
 /* global InstanceStatus, MongoInternals */
+import _ from 'underscore';
+import os from 'os';
+
 RocketChat.statistics.get = function _getStatistics() {
 	const statistics = {};
 
@@ -40,7 +43,6 @@ RocketChat.statistics.get = function _getStatistics() {
 	statistics.lastMessageSentAt = RocketChat.models.Messages.getLastTimestamp();
 	statistics.lastSeenSubscription = RocketChat.models.Subscriptions.getLastSeen();
 
-	const os = Npm.require('os');
 	statistics.os = {
 		type: os.type(),
 		platform: os.platform(),
@@ -57,6 +59,11 @@ RocketChat.statistics.get = function _getStatistics() {
 		nodeVersion: process.version,
 		pid: process.pid,
 		uptime: process.uptime()
+	};
+
+	statistics.deploy = {
+		method: process.env.DEPLOY_METHOD || 'tar',
+		platform: process.env.DEPLOY_PLATFORM || 'selfinstall'
 	};
 
 	statistics.migration = RocketChat.Migrations._getControl();
